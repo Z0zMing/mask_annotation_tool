@@ -47,6 +47,16 @@ class Canvas(QWidget):
         self.cachedPixmap = QPixmap()  
         self.cachedDirty = True 
         self.updateRect = QRect()
+        
+        self.panMode = False
+        self.panning = False
+        self.panStart = QPoint()
+        self.imageOffset = QPoint(0, 0)
+        
+        # Add undo/redo stacks
+        self.undoStack = []
+        self.redoStack = []
+        self.maxStackSize = 20  # Limit stack size to prevent memory issues
 
         self.setAutoFillBackground(True)
         p = self.palette()
@@ -91,6 +101,9 @@ class Canvas(QWidget):
             
         self.maskLayer = QImage(self.baseImage.size(), QImage.Format_ARGB32)
         self.maskLayer.fill(Qt.transparent)
+        # Clear history when creating a new mask
+        self.undoStack.clear()
+        self.redoStack.clear()
 
     def calculateImageRect(self):
         if self.baseImage.isNull():
@@ -118,11 +131,21 @@ class Canvas(QWidget):
             newWidth = int(imageWidth * self.scaleFactor)
             newHeight = int(imageHeight * self.scaleFactor)
         
-        x = (self.width() - newWidth) // 2
-        y = (self.height() - newHeight) // 2
+        x = (self.width() - newWidth) // 2 + self.imageOffset.x()
+        y = (self.height() - newHeight) // 2 + self.imageOffset.y()
         
         self.imageRect = QRect(x, y, newWidth, newHeight)
-    
+
+    def resetPan(self):
+        self.zoomFactor = 1.0
+        self.imageOffset = QPoint(0, 0)
+        self.calculateImageRect()
+        self.invalidateCache()
+        self.update()
+        
+        if self.parent and hasattr(self.parent, 'statusBar'):
+            self.parent.statusBar.showMessage("视图已重置：缩放和平移已恢复到初始状态")
+
     def wheelEvent(self, event):
         if event.modifiers() & Qt.ControlModifier and not self.baseImage.isNull():
             delta = event.angleDelta().y()
@@ -169,6 +192,10 @@ class Canvas(QWidget):
 
     def clearMask(self):
         if self.maskLayer:
+            # Save current state before clearing
+            if self.hasMaskContent():
+                self.saveMaskState()
+                
             self.maskLayer.fill(Qt.transparent)
             self.invalidateCache()
             self.update()
@@ -312,10 +339,14 @@ class Canvas(QWidget):
             self.updateCachedPixmap(updateRect)
             
             painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform,  self.zoomFactor < 1.0)
             painter.drawPixmap(updateRect, self.cachedPixmap, updateRect)
             painter.end()
         else:
             painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform,  self.zoomFactor < 1.0)
             
             painter.setPen(Qt.black)
             painter.fillRect(updateRect, QColor(220, 220, 220))
@@ -347,6 +378,16 @@ class Canvas(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and not self.baseImage.isNull():
+            if self.panMode:
+                self.panning = True
+                self.panStart = event.pos()
+                self.setCursor(Qt.ClosedHandCursor)
+                return
+            
+            # Save state before starting a new drawing operation
+            if not self.drawing and self.maskLayer:
+                self.saveMaskState()
+                
             imagePoint = self.mapToImage(event.pos())
             
             if imagePoint.x() >= 0 and imagePoint.y() >= 0 and imagePoint.x() < self.baseImage.width() and imagePoint.y() < self.baseImage.height():
@@ -395,6 +436,15 @@ class Canvas(QWidget):
                 self.update(affectedArea)
 
     def mouseMoveEvent(self, event):
+        if (event.buttons() & Qt.LeftButton) and self.panning:
+            delta = event.pos() - self.panStart
+            self.imageOffset += delta
+            self.panStart = event.pos()
+            self.calculateImageRect()
+            self.invalidateCache()
+            self.update()
+            return
+            
         if (event.buttons() & Qt.LeftButton) and self.drawing:
             imagePoint = self.mapToImage(event.pos())
             
@@ -452,4 +502,50 @@ class Canvas(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
+            if self.panning:
+                self.panning = False
+                self.setCursor(Qt.OpenHandCursor)
             self.drawing = False
+
+    def setPanMode(self, enabled):
+        self.panMode = enabled
+        self.setCursor(Qt.OpenHandCursor if enabled else Qt.ArrowCursor)
+        self.invalidateCache()
+        self.update()
+    
+    def saveMaskState(self):
+        if self.maskLayer:
+            self.redoStack.clear()
+            self.undoStack.append(self.maskLayer.copy())
+            if len(self.undoStack) > self.maxStackSize:
+                self.undoStack.pop(0)
+    
+    def canUndo(self):
+        return len(self.undoStack) > 0
+    
+    def canRedo(self):
+        return len(self.redoStack) > 0
+    
+    def undo(self):
+        if not self.canUndo():
+            return False
+            
+        if self.maskLayer:
+            self.redoStack.append(self.maskLayer.copy())
+            self.maskLayer = self.undoStack.pop()
+            self.invalidateCache()
+            self.update()
+            return True
+        return False
+    
+    def redo(self):
+        if not self.canRedo():
+            return False
+            
+        if self.maskLayer:
+            self.undoStack.append(self.maskLayer.copy())
+            self.maskLayer = self.redoStack.pop()
+            self.invalidateCache()
+            self.update()
+            return True
+        return False

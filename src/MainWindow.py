@@ -65,6 +65,9 @@ class ImageMaskingTool(QMainWindow):
         self.saveDelay = 1000
 
         self.canvas.cacheEnabled = True
+        
+        self.panMode = True
+        self.canvas.setPanMode(True)
 
     def initUI(self):
         self.setWindowTitle("图像掩码工具")
@@ -94,12 +97,21 @@ class ImageMaskingTool(QMainWindow):
         drawModeLabel = QLabel("绘制模式:")
         self.targetButton = QPushButton("目标区域 (添加)")
         self.targetButton.setCheckable(True)
-        self.targetButton.setChecked(True)
-        self.targetButton.clicked.connect(lambda: self.setDrawingMode("target"))
+        self.targetButton.setChecked(False)
+        self.targetButton.clicked.connect(lambda: self.setDrawingMode("target") if self.targetButton.isChecked() else None)
 
         self.nonTargetButton = QPushButton("非目标区域 (移除)")
         self.nonTargetButton.setCheckable(True)
-        self.nonTargetButton.clicked.connect(lambda: self.setDrawingMode("non-target"))
+        self.nonTargetButton.setChecked(False)
+        self.nonTargetButton.clicked.connect(lambda: self.setDrawingMode("non-target") if self.nonTargetButton.isChecked() else None)
+        
+        self.panButton = QPushButton("平移模式")
+        self.panButton.setCheckable(True)
+        self.panButton.setChecked(True)
+        self.panButton.clicked.connect(self.togglePanMode)
+        
+        self.resetViewButton = QPushButton("重置视图")
+        self.resetViewButton.clicked.connect(self.resetView)
 
         brushLabel = QLabel("画笔大小:")
         self.brushSlider = QSlider(Qt.Horizontal)
@@ -121,6 +133,18 @@ class ImageMaskingTool(QMainWindow):
         self.whiteColorButton = QPushButton("")
         self.whiteColorButton.setStyleSheet("background-color: white; min-width: 24px; min-height: 24px;")
         self.whiteColorButton.clicked.connect(lambda: self.setDrawingColor(QColor(255, 255, 255, 50)))
+
+        self.greenColorButton = QPushButton("")
+        self.greenColorButton.setStyleSheet("background-color: green; min-width: 24px; min-height: 24px;")
+        self.greenColorButton.clicked.connect(lambda: self.setDrawingColor(QColor(0, 255, 0, 50)))
+
+        self.blueColorButton = QPushButton("")
+        self.blueColorButton.setStyleSheet("background-color: blue; min-width: 24px; min-height: 24px;")
+        self.blueColorButton.clicked.connect(lambda: self.setDrawingColor(QColor(0, 0, 255, 50)))
+
+        self.yellowColorButton = QPushButton("")
+        self.yellowColorButton.setStyleSheet("background-color: yellow; min-width: 24px; min-height: 24px;")
+        self.yellowColorButton.clicked.connect(lambda: self.setDrawingColor(QColor(255, 255, 0, 50)))
         
         self.customColorButton = QPushButton("自定义")
         self.customColorButton.clicked.connect(self.selectCustomColor)
@@ -129,10 +153,15 @@ class ImageMaskingTool(QMainWindow):
         drawModeLayout.addWidget(drawModeLabel)
         drawModeLayout.addWidget(self.targetButton)
         drawModeLayout.addWidget(self.nonTargetButton)
+        drawModeLayout.addWidget(self.panButton)
+        drawModeLayout.addWidget(self.resetViewButton)
         drawModeLayout.addStretch()
         drawModeLayout.addWidget(colorLabel)
         drawModeLayout.addWidget(self.redColorButton)
         drawModeLayout.addWidget(self.whiteColorButton)
+        drawModeLayout.addWidget(self.greenColorButton)
+        drawModeLayout.addWidget(self.blueColorButton)
+        drawModeLayout.addWidget(self.yellowColorButton)
         drawModeLayout.addWidget(self.customColorButton)
 
         controlsLayout.addWidget(self.openButton)
@@ -188,7 +217,7 @@ class ImageMaskingTool(QMainWindow):
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
-        self.statusBar.showMessage("准备就绪。打开图像或文件夹开始。")
+        self.statusBar.showMessage("平移模式: 可以用鼠标左键拖动图像")
 
         QShortcut(QKeySequence(Qt.Key_Left), self, self.previousImage)
         QShortcut(QKeySequence(Qt.Key_Right), self, self.nextImage)
@@ -199,6 +228,12 @@ class ImageMaskingTool(QMainWindow):
 
         QShortcut(QKeySequence(Qt.Key_Plus | Qt.ControlModifier), self, self.increaseBrushSize)
         QShortcut(QKeySequence(Qt.Key_Minus | Qt.ControlModifier), self, self.decreaseBrushSize)
+        
+        QShortcut(QKeySequence(Qt.Key_Space), self, self.togglePanMode)
+        QShortcut(QKeySequence(Qt.Key_R), self, self.resetView)
+        
+        QShortcut(QKeySequence(Qt.Key_Z | Qt.ControlModifier), self, self.undoAction)
+        QShortcut(QKeySequence(Qt.Key_Y | Qt.ControlModifier), self, self.redoAction)
 
         self.imagePath = None
         self.brushSize = 10
@@ -521,13 +556,38 @@ class ImageMaskingTool(QMainWindow):
         if mode == "target":
             self.targetButton.setChecked(True)
             self.nonTargetButton.setChecked(False)
-            self.statusBar.showMessage("绘制模式: 目标区域 (添加到掩码)")
+            self.panButton.setChecked(False)
+            self.panMode = False
+            self.canvas.setPanMode(False)
+            self.statusBar.showMessage("绘制模式: 目标区域 (添加到掩码)，可使用Ctrl+Z撤销，Ctrl+Y重做")
         else:
             self.targetButton.setChecked(False)
             self.nonTargetButton.setChecked(True)
-            self.statusBar.showMessage("绘制模式: 非目标区域 (从掩码中移除)")
+            self.panButton.setChecked(False)
+            self.panMode = False
+            self.canvas.setPanMode(False)
+            self.statusBar.showMessage("绘制模式: 非目标区域 (从掩码中移除)，可使用Ctrl+Z撤销，Ctrl+Y重做")
 
         self.canvas.setDrawingMode(mode)
+    
+    def togglePanMode(self):
+        self.panMode = not self.panMode
+        self.panButton.setChecked(self.panMode)
+        self.targetButton.setChecked(False)
+        self.nonTargetButton.setChecked(False)
+        self.canvas.setPanMode(self.panMode)
+        
+        if self.panMode:
+            self.statusBar.showMessage("平移模式: 可以用鼠标左键拖动图像")
+        else:
+            if self.drawingMode == "target":
+                self.statusBar.showMessage("绘制模式: 目标区域 (添加到掩码)，可使用Ctrl+Z撤销，Ctrl+Y重做")
+            else:
+                self.statusBar.showMessage("绘制模式: 非目标区域 (从掩码中移除)，可使用Ctrl+Z撤销，Ctrl+Y重做")
+    
+    def resetView(self):
+        self.canvas.resetPan()
+        self.statusBar.showMessage("视图已重置")
         
     def setDrawingColor(self, color):
         self.drawingColor = color
@@ -548,6 +608,32 @@ class ImageMaskingTool(QMainWindow):
         if color.isValid():
             color.setAlpha(50)
             self.setDrawingColor(color)
+
+    def undoAction(self):
+        if hasattr(self.canvas, 'undo'):
+            if self.panMode:
+                self.statusBar.showMessage("绘制模式下才能执行撤销操作")
+                return
+            
+            if self.canvas.undo():
+                if self.imagePath in self.masks:
+                    self.masks[self.imagePath] = self.canvas.maskLayer.copy()
+                self.statusBar.showMessage("已撤销上一步绘制操作")
+            else:
+                self.statusBar.showMessage("没有可撤销的操作")
+
+    def redoAction(self):
+        if hasattr(self.canvas, 'redo'):
+            if self.panMode:
+                self.statusBar.showMessage("绘制模式下才能执行重做操作")
+                return
+                
+            if self.canvas.redo():
+                if self.imagePath in self.masks:
+                    self.masks[self.imagePath] = self.canvas.maskLayer.copy()
+                self.statusBar.showMessage("已重做上一步绘制操作")
+            else:
+                self.statusBar.showMessage("没有可重做的操作")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
