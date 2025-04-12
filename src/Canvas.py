@@ -14,7 +14,7 @@ from PyQt5.QtGui import (
     QImageReader,
     QPixmap,
 )
-from PyQt5.QtCore import Qt, QPoint, QSize, QRect, QRectF
+from PyQt5.QtCore import Qt, QPoint, QRect, QRectF
 import numpy as np
 
 

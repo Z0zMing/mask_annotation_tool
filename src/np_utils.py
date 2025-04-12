@@ -1,6 +1,5 @@
 import numpy as np
 from PyQt5.QtGui import QImage
-import sys
 
 def qimage_to_numpy(image):
     if image.isNull():

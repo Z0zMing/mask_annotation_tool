@@ -8,7 +8,7 @@
 
 1. 克隆该仓库：
    ```
-   git clone <仓库地址>
+   git clone https://github.com/Z0zMing/mask_annotation_tool.git
    ```
 
 2. 进入项目目录：

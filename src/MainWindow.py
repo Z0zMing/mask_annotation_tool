@@ -16,20 +16,13 @@ from PyQt5.QtWidgets import (
     QColorDialog,
 )
 from PyQt5.QtGui import (
-    QPixmap,
-    QPainter,
-    QPen,
     QColor,
     QImage,
-    QPainterPath,
-    QBrush,
     QKeySequence,
     QImageReader,
 )
-from PyQt5.QtCore import Qt, QPoint, QSize, QRect, QTimer, QThreadPool, QRunnable
-import threading
+from PyQt5.QtCore import Qt, QTimer, QThreadPool, QRunnable
 from Canvas import Canvas
-import numpy as np
 try:
     from np_utils import mask_has_content
     NUMPY_AVAILABLE = True
