@@ -98,6 +98,11 @@ class ImageMaskingTool(QMainWindow):
         self.nonTargetButton.setChecked(False)
         self.nonTargetButton.clicked.connect(lambda: self.setDrawingMode("non-target") if self.nonTargetButton.isChecked() else None)
         
+        self.lassoButton = QPushButton("套索模式")
+        self.lassoButton.setCheckable(True)
+        self.lassoButton.setChecked(False)
+        self.lassoButton.clicked.connect(lambda: self.setDrawingMode("lasso") if self.lassoButton.isChecked() else None)
+        
         self.panButton = QPushButton("平移模式")
         self.panButton.setCheckable(True)
         self.panButton.setChecked(True)
@@ -146,6 +151,7 @@ class ImageMaskingTool(QMainWindow):
         drawModeLayout.addWidget(drawModeLabel)
         drawModeLayout.addWidget(self.targetButton)
         drawModeLayout.addWidget(self.nonTargetButton)
+        drawModeLayout.addWidget(self.lassoButton)  
         drawModeLayout.addWidget(self.panButton)
         drawModeLayout.addWidget(self.resetViewButton)
         drawModeLayout.addStretch()
@@ -227,6 +233,8 @@ class ImageMaskingTool(QMainWindow):
         
         QShortcut(QKeySequence(Qt.Key_Z | Qt.ControlModifier), self, self.undoAction)
         QShortcut(QKeySequence(Qt.Key_Y | Qt.ControlModifier), self, self.redoAction)
+        
+        QShortcut(QKeySequence(Qt.Key_L), self, self.toggleLassoMode)
 
         self.imagePath = None
         self.brushSize = 10
@@ -546,21 +554,24 @@ class ImageMaskingTool(QMainWindow):
 
     def setDrawingMode(self, mode):
         self.drawingMode = mode
+        self.targetButton.setChecked(False)
+        self.nonTargetButton.setChecked(False)
+        self.lassoButton.setChecked(False)
+        self.panButton.setChecked(False)
+        
+        self.panMode = False
+        self.canvas.setPanMode(False)
+        
         if mode == "target":
             self.targetButton.setChecked(True)
-            self.nonTargetButton.setChecked(False)
-            self.panButton.setChecked(False)
-            self.panMode = False
-            self.canvas.setPanMode(False)
             self.statusBar.showMessage("绘制模式: 目标区域 (添加到掩码)，可使用Ctrl+Z撤销，Ctrl+Y重做")
-        else:
-            self.targetButton.setChecked(False)
+        elif mode == "non-target":
             self.nonTargetButton.setChecked(True)
-            self.panButton.setChecked(False)
-            self.panMode = False
-            self.canvas.setPanMode(False)
             self.statusBar.showMessage("绘制模式: 非目标区域 (从掩码中移除)，可使用Ctrl+Z撤销，Ctrl+Y重做")
-
+        elif mode == "lasso":
+            self.lassoButton.setChecked(True)
+            self.statusBar.showMessage("套索模式: 按住鼠标绘制闭合曲线，松开后自动填充区域，可使用Ctrl+Z撤销，Ctrl+Y重做")
+        
         self.canvas.setDrawingMode(mode)
     
     def togglePanMode(self):
@@ -568,15 +579,19 @@ class ImageMaskingTool(QMainWindow):
         self.panButton.setChecked(self.panMode)
         self.targetButton.setChecked(False)
         self.nonTargetButton.setChecked(False)
+        self.lassoButton.setChecked(False)
         self.canvas.setPanMode(self.panMode)
         
         if self.panMode:
             self.statusBar.showMessage("平移模式: 可以用鼠标左键拖动图像")
         else:
-            if self.drawingMode == "target":
-                self.statusBar.showMessage("绘制模式: 目标区域 (添加到掩码)，可使用Ctrl+Z撤销，Ctrl+Y重做")
-            else:
-                self.statusBar.showMessage("绘制模式: 非目标区域 (从掩码中移除)，可使用Ctrl+Z撤销，Ctrl+Y重做")
+            self.setDrawingMode(self.drawingMode)
+    
+    def toggleLassoMode(self):
+        if self.drawingMode == "lasso":
+            self.setDrawingMode("target")
+        else:
+            self.setDrawingMode("lasso")
     
     def resetView(self):
         self.canvas.resetPan()

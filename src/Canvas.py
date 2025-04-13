@@ -13,6 +13,7 @@ from PyQt5.QtGui import (
     QBrush,
     QImageReader,
     QPixmap,
+    QPainterPath,
 )
 from PyQt5.QtCore import Qt, QPoint, QRect, QRectF
 import numpy as np
@@ -53,10 +54,12 @@ class Canvas(QWidget):
         self.panStart = QPoint()
         self.imageOffset = QPoint(0, 0)
         
-        # Add undo/redo stacks
+        self.lassoPoints = []  
+        self.isDrawingLasso = False  
+        
         self.undoStack = []
         self.redoStack = []
-        self.maxStackSize = 20  # Limit stack size to prevent memory issues
+        self.maxStackSize = 20  
 
         self.setAutoFillBackground(True)
         p = self.palette()
@@ -101,7 +104,6 @@ class Canvas(QWidget):
             
         self.maskLayer = QImage(self.baseImage.size(), QImage.Format_ARGB32)
         self.maskLayer.fill(Qt.transparent)
-        # Clear history when creating a new mask
         self.undoStack.clear()
         self.redoStack.clear()
 
@@ -173,6 +175,13 @@ class Canvas(QWidget):
             super().wheelEvent(event)
         
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape and self.isDrawingLasso:
+            self.isDrawingLasso = False
+            self.lassoPoints = []
+            self.drawing = False
+            self.update()
+            return
+        
         super().keyPressEvent(event)
         
     def resizeEvent(self, event):
@@ -189,10 +198,13 @@ class Canvas(QWidget):
 
     def setDrawingMode(self, mode):
         self.drawingMode = mode
+        if self.isDrawingLasso and mode != "lasso":
+            self.isDrawingLasso = False
+            self.lassoPoints = []
+            self.update()
 
     def clearMask(self):
         if self.maskLayer:
-            # Save current state before clearing
             if self.hasMaskContent():
                 self.saveMaskState()
                 
@@ -342,6 +354,32 @@ class Canvas(QWidget):
             painter.setRenderHint(QPainter.Antialiasing, True)
             painter.setRenderHint(QPainter.SmoothPixmapTransform,  self.zoomFactor < 1.0)
             painter.drawPixmap(updateRect, self.cachedPixmap, updateRect)
+            
+            if self.isDrawingLasso and len(self.lassoPoints) > 1:
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                
+                pen = QPen(QColor(255, 255, 0))  
+                pen.setWidth(2)
+                pen.setStyle(Qt.SolidLine)
+                painter.setPen(pen)
+                
+                path = QPainterPath()
+                
+                firstPoint = QPoint(
+                    self.imageRect.x() + int(self.lassoPoints[0].x() * self.scaleFactor),
+                    self.imageRect.y() + int(self.lassoPoints[0].y() * self.scaleFactor)
+                )
+                path.moveTo(firstPoint)
+                
+                for i in range(1, len(self.lassoPoints)):
+                    point = QPoint(
+                        self.imageRect.x() + int(self.lassoPoints[i].x() * self.scaleFactor),
+                        self.imageRect.y() + int(self.lassoPoints[i].y() * self.scaleFactor)
+                    )
+                    path.lineTo(point)
+                
+                painter.drawPath(path)
+            
             painter.end()
         else:
             painter = QPainter(self)
@@ -361,6 +399,31 @@ class Canvas(QWidget):
                     if self.drawingMode != "target":
                         painter.setPen(QPen(QColor(255, 100, 100), 2, Qt.DashLine))
                         painter.drawRect(self.imageRect)
+            
+            if self.isDrawingLasso and len(self.lassoPoints) > 1:
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                
+                pen = QPen(QColor(255, 255, 0))  
+                pen.setWidth(2)
+                pen.setStyle(Qt.SolidLine)
+                painter.setPen(pen)
+                
+                path = QPainterPath()
+                
+                firstPoint = QPoint(
+                    self.imageRect.x() + int(self.lassoPoints[0].x() * self.scaleFactor),
+                    self.imageRect.y() + int(self.lassoPoints[0].y() * self.scaleFactor)
+                )
+                path.moveTo(firstPoint)
+                
+                for i in range(1, len(self.lassoPoints)):
+                    point = QPoint(
+                        self.imageRect.x() + int(self.lassoPoints[i].x() * self.scaleFactor),
+                        self.imageRect.y() + int(self.lassoPoints[i].y() * self.scaleFactor)
+                    )
+                    path.lineTo(point)
+                
+                painter.drawPath(path)
             
             painter.end()
 
@@ -384,7 +447,6 @@ class Canvas(QWidget):
                 self.setCursor(Qt.ClosedHandCursor)
                 return
             
-            # Save state before starting a new drawing operation
             if not self.drawing and self.maskLayer:
                 self.saveMaskState()
                 
@@ -392,6 +454,13 @@ class Canvas(QWidget):
             
             if imagePoint.x() >= 0 and imagePoint.y() >= 0 and imagePoint.x() < self.baseImage.width() and imagePoint.y() < self.baseImage.height():
                 self.drawing = True
+                
+                if self.drawingMode == "lasso":
+                    self.isDrawingLasso = True
+                    self.lassoPoints = [imagePoint]
+                    self.update()
+                    return
+                
                 self.lastPoint = imagePoint
 
                 radius = self.brushSize // 2 + 2
@@ -449,6 +518,11 @@ class Canvas(QWidget):
             imagePoint = self.mapToImage(event.pos())
             
             if imagePoint.x() >= 0 and imagePoint.y() >= 0 and imagePoint.x() < self.baseImage.width() and imagePoint.y() < self.baseImage.height():
+                if self.drawingMode == "lasso" and self.isDrawingLasso:
+                    self.lassoPoints.append(imagePoint)
+                    self.update()
+                    return
+                
                 minX = min(self.lastPoint.x(), imagePoint.x()) - self.brushSize
                 minY = min(self.lastPoint.y(), imagePoint.y()) - self.brushSize
                 maxX = max(self.lastPoint.x(), imagePoint.x()) + self.brushSize
@@ -505,7 +579,50 @@ class Canvas(QWidget):
             if self.panning:
                 self.panning = False
                 self.setCursor(Qt.OpenHandCursor)
+            
+            if self.isDrawingLasso and len(self.lassoPoints) > 2:
+                self.fillLassoArea()
+                self.isDrawingLasso = False
+                self.lassoPoints = []
+                
             self.drawing = False
+    
+    def fillLassoArea(self):
+        if len(self.lassoPoints) < 3:
+            return  
+        
+        tempImage = QImage(self.maskLayer.size(), QImage.Format_ARGB32)
+        tempImage.fill(Qt.transparent)
+        
+        painter = QPainter(tempImage)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        
+        painter.setPen(Qt.NoPen)  
+        painter.setBrush(QBrush(self.drawingColor))
+        
+        path = QPainterPath()
+        path.moveTo(self.lassoPoints[0])
+        
+        for i in range(1, len(self.lassoPoints)):
+            path.lineTo(self.lassoPoints[i])
+        
+        path.closeSubpath()
+        
+        painter.drawPath(path)
+        painter.end()
+        
+        painter = QPainter(self.maskLayer)
+        
+        if self.drawingMode == "lasso" or self.drawingMode == "target":
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        else:
+            painter.setCompositionMode(QPainter.CompositionMode_Clear)
+            
+        painter.drawImage(0, 0, tempImage)
+        painter.end()
+        
+        self.cachedDirty = True
+        self.update()
 
     def setPanMode(self, enabled):
         self.panMode = enabled
