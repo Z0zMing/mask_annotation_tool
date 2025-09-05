@@ -61,6 +61,10 @@ class Canvas(QWidget):
         self.redoStack = []
         self.maxStackSize = 20  
 
+        self.rectSelecting = False
+        self.rectStart = QPoint()
+        self.rectEnd = QPoint()
+
         self.setAutoFillBackground(True)
         p = self.palette()
         p.setColor(self.backgroundRole(), QColor(220, 220, 220))
@@ -97,7 +101,7 @@ class Canvas(QWidget):
     def invalidateCache(self):
         self.cachedDirty = True
         self.updateRect = self.rect()
-            
+    
     def createMaskLayer(self):
         if self.baseImage.isNull():
             return
@@ -260,7 +264,7 @@ class Canvas(QWidget):
                 
         if self.maskLayer:
             binaryMask = QImage(self.maskLayer.size(), QImage.Format_RGB32)
-            binaryMask.fill(Qt.black)
+            binaryMask.fill(Qt.white)
 
             hasMarks = False
 
@@ -270,7 +274,7 @@ class Canvas(QWidget):
                     alpha = (pixel >> 24) & 0xFF
 
                     if alpha > 0:
-                        binaryMask.setPixel(x, y, 0xFFFFFF)
+                        binaryMask.setPixel(x, y, 0x000000)
                         hasMarks = True
 
             if not hasMarks:
@@ -299,47 +303,53 @@ class Canvas(QWidget):
             self.cachedDirty = False
             
             painter = QPainter(self.cachedPixmap)
-            
-            painter.fillRect(self.rect(), QColor(220, 220, 220))
-            
-            if not self.imageRect.isEmpty():
-                painter.drawImage(self.imageRect, self.baseImage)
+            try:
+                painter.setRenderHint(QPainter.Antialiasing, True)
                 
-                if self.maskLayer:
-                    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                    painter.drawImage(self.imageRect, self.maskLayer)
+                # 绘制背景
+                painter.fillRect(self.rect(), QColor(220, 220, 220))
+                
+                # 绘制基础图像
+                if not self.imageRect.isEmpty():
+                    painter.drawImage(self.imageRect, self.baseImage)
                     
+                    # 绘制掩膜层
+                    if self.maskLayer and not self.maskLayer.isNull():
+                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                        painter.drawImage(self.imageRect, self.maskLayer)
+                        
+                    # 绘制模式指示器
                     if self.drawingMode != "target":
                         painter.setPen(QPen(QColor(255, 100, 100), 2, Qt.DashLine))
                         painter.drawRect(self.imageRect)
-            
-            painter.end()
+            finally:
+                painter.end()
         else:
             painter = QPainter(self.cachedPixmap)
-            
-            painter.fillRect(updateRect, QColor(220, 220, 220))
-            
-            imgUpdateRect = self.imageRect.intersected(updateRect)
-            if not imgUpdateRect.isEmpty():
-                imgX = (imgUpdateRect.x() - self.imageRect.x()) / self.scaleFactor
-                imgY = (imgUpdateRect.y() - self.imageRect.y()) / self.scaleFactor
-                imgWidth = imgUpdateRect.width() / self.scaleFactor
-                imgHeight = imgUpdateRect.height() / self.scaleFactor
+            try:
+                painter.fillRect(updateRect, QColor(220, 220, 220))
                 
-                srcRect = QRectF(imgX, imgY, imgWidth, imgHeight)
-                destRect = QRectF(imgUpdateRect)
+                imgUpdateRect = self.imageRect.intersected(updateRect)
+                if not imgUpdateRect.isEmpty():
+                    imgX = (imgUpdateRect.x() - self.imageRect.x()) / self.scaleFactor
+                    imgY = (imgUpdateRect.y() - self.imageRect.y()) / self.scaleFactor
+                    imgWidth = imgUpdateRect.width() / self.scaleFactor
+                    imgHeight = imgUpdateRect.height() / self.scaleFactor
+                    
+                    srcRect = QRectF(imgX, imgY, imgWidth, imgHeight)
+                    destRect = QRectF(imgUpdateRect)
+                    
+                    painter.drawImage(destRect, self.baseImage, srcRect)
+                    
+                    if self.maskLayer:
+                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                        painter.drawImage(destRect, self.maskLayer, srcRect)
                 
-                painter.drawImage(destRect, self.baseImage, srcRect)
-                
-                if self.maskLayer:
-                    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                    painter.drawImage(destRect, self.maskLayer, srcRect)
-            
-            if self.drawingMode != "target" and updateRect.intersects(self.imageRect):
-                painter.setPen(QPen(QColor(255, 100, 100), 2, Qt.DashLine))
-                painter.drawRect(self.imageRect)
-            
-            painter.end()
+                if self.drawingMode != "target" and updateRect.intersects(self.imageRect):
+                    painter.setPen(QPen(QColor(255, 100, 100), 2, Qt.DashLine))
+                    painter.drawRect(self.imageRect)
+            finally:
+                painter.end()
     
     def paintEvent(self, event):
         if self.baseImage.isNull():
@@ -351,81 +361,105 @@ class Canvas(QWidget):
             self.updateCachedPixmap(updateRect)
             
             painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform,  self.zoomFactor < 1.0)
-            painter.drawPixmap(updateRect, self.cachedPixmap, updateRect)
-            
-            if self.isDrawingLasso and len(self.lassoPoints) > 1:
+            try:
                 painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setRenderHint(QPainter.SmoothPixmapTransform, self.zoomFactor < 1.0)
+                painter.drawPixmap(updateRect, self.cachedPixmap, updateRect)
                 
-                pen = QPen(QColor(255, 255, 0))  
-                pen.setWidth(2)
-                pen.setStyle(Qt.SolidLine)
-                painter.setPen(pen)
-                
-                path = QPainterPath()
-                
-                firstPoint = QPoint(
-                    self.imageRect.x() + int(self.lassoPoints[0].x() * self.scaleFactor),
-                    self.imageRect.y() + int(self.lassoPoints[0].y() * self.scaleFactor)
-                )
-                path.moveTo(firstPoint)
-                
-                for i in range(1, len(self.lassoPoints)):
-                    point = QPoint(
-                        self.imageRect.x() + int(self.lassoPoints[i].x() * self.scaleFactor),
-                        self.imageRect.y() + int(self.lassoPoints[i].y() * self.scaleFactor)
+                # 绘制套索工具预览
+                if self.isDrawingLasso and len(self.lassoPoints) > 1:
+                    painter.setRenderHint(QPainter.Antialiasing, True)
+                    
+                    pen = QPen(QColor(255, 255, 0))
+                    pen.setWidth(2)
+                    pen.setStyle(Qt.SolidLine)
+                    painter.setPen(pen)
+                    
+                    path = QPainterPath()
+                    
+                    firstPoint = QPoint(
+                        self.imageRect.x() + int(self.lassoPoints[0].x() * self.scaleFactor),
+                        self.imageRect.y() + int(self.lassoPoints[0].y() * self.scaleFactor)
                     )
-                    path.lineTo(point)
-                
-                painter.drawPath(path)
-            
-            painter.end()
+                    path.moveTo(firstPoint)
+                    
+                    for i in range(1, len(self.lassoPoints)):
+                        point = QPoint(
+                            self.imageRect.x() + int(self.lassoPoints[i].x() * self.scaleFactor),
+                            self.imageRect.y() + int(self.lassoPoints[i].y() * self.scaleFactor)
+                        )
+                        path.lineTo(point)
+                    
+                    painter.drawPath(path)
+                # 绘制框选预览
+                if self.drawingMode in ("rect_add", "rect_erase", "rect_prompt") and self.rectSelecting:
+                    pen = QPen(QColor(0, 255, 0))
+                    pen.setWidth(2)
+                    pen.setStyle(Qt.DashLine)
+                    painter.setPen(pen)
+                    x1 = self.imageRect.x() + int(self.rectStart.x() * self.scaleFactor)
+                    y1 = self.imageRect.y() + int(self.rectStart.y() * self.scaleFactor)
+                    x2 = self.imageRect.x() + int(self.rectEnd.x() * self.scaleFactor)
+                    y2 = self.imageRect.y() + int(self.rectEnd.y() * self.scaleFactor)
+                    painter.drawRect(QRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)))
+            finally:
+                painter.end()
         else:
             painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform,  self.zoomFactor < 1.0)
-            
-            painter.setPen(Qt.black)
-            painter.fillRect(updateRect, QColor(220, 220, 220))
-            
-            if not self.imageRect.isEmpty() and updateRect.intersects(self.imageRect):
-                painter.drawImage(self.imageRect, self.baseImage)
-                
-                if self.maskLayer:
-                    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                    painter.drawImage(self.imageRect, self.maskLayer)
-                    
-                    if self.drawingMode != "target":
-                        painter.setPen(QPen(QColor(255, 100, 100), 2, Qt.DashLine))
-                        painter.drawRect(self.imageRect)
-            
-            if self.isDrawingLasso and len(self.lassoPoints) > 1:
+            try:
                 painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setRenderHint(QPainter.SmoothPixmapTransform, self.zoomFactor < 1.0)
                 
-                pen = QPen(QColor(255, 255, 0))  
-                pen.setWidth(2)
-                pen.setStyle(Qt.SolidLine)
-                painter.setPen(pen)
+                painter.setPen(Qt.black)
+                painter.fillRect(updateRect, QColor(220, 220, 220))
                 
-                path = QPainterPath()
+                if not self.imageRect.isEmpty() and updateRect.intersects(self.imageRect):
+                    painter.drawImage(self.imageRect, self.baseImage)
+                    
+                    if self.maskLayer:
+                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                        painter.drawImage(self.imageRect, self.maskLayer)
+                        
+                        if self.drawingMode != "target":
+                            painter.setPen(QPen(QColor(255, 100, 100), 2, Qt.DashLine))
+                            painter.drawRect(self.imageRect)
                 
-                firstPoint = QPoint(
-                    self.imageRect.x() + int(self.lassoPoints[0].x() * self.scaleFactor),
-                    self.imageRect.y() + int(self.lassoPoints[0].y() * self.scaleFactor)
-                )
-                path.moveTo(firstPoint)
-                
-                for i in range(1, len(self.lassoPoints)):
-                    point = QPoint(
-                        self.imageRect.x() + int(self.lassoPoints[i].x() * self.scaleFactor),
-                        self.imageRect.y() + int(self.lassoPoints[i].y() * self.scaleFactor)
+                if self.isDrawingLasso and len(self.lassoPoints) > 1:
+                    painter.setRenderHint(QPainter.Antialiasing, True)
+                    
+                    pen = QPen(QColor(255, 255, 0))  
+                    pen.setWidth(2)
+                    pen.setStyle(Qt.SolidLine)
+                    painter.setPen(pen)
+                    
+                    path = QPainterPath()
+                    
+                    firstPoint = QPoint(
+                        self.imageRect.x() + int(self.lassoPoints[0].x() * self.scaleFactor),
+                        self.imageRect.y() + int(self.lassoPoints[0].y() * self.scaleFactor)
                     )
-                    path.lineTo(point)
-                
-                painter.drawPath(path)
-            
-            painter.end()
+                    path.moveTo(firstPoint)
+                    
+                    for i in range(1, len(self.lassoPoints)):
+                        point = QPoint(
+                            self.imageRect.x() + int(self.lassoPoints[i].x() * self.scaleFactor),
+                            self.imageRect.y() + int(self.lassoPoints[i].y() * self.scaleFactor)
+                        )
+                        path.lineTo(point)
+                    
+                    painter.drawPath(path)
+                if self.drawingMode in ("rect_add", "rect_erase", "rect_prompt") and self.rectSelecting:
+                    pen = QPen(QColor(0, 255, 0))
+                    pen.setWidth(2)
+                    pen.setStyle(Qt.DashLine)
+                    painter.setPen(pen)
+                    x1 = self.imageRect.x() + int(self.rectStart.x() * self.scaleFactor)
+                    y1 = self.imageRect.y() + int(self.rectStart.y() * self.scaleFactor)
+                    x2 = self.imageRect.x() + int(self.rectEnd.x() * self.scaleFactor)
+                    y2 = self.imageRect.y() + int(self.rectEnd.y() * self.scaleFactor)
+                    painter.drawRect(QRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)))
+            finally:
+                painter.end()
 
     def mapToImage(self, point):
         if self.imageRect.isEmpty() or self.baseImage.isNull():
@@ -447,6 +481,15 @@ class Canvas(QWidget):
                 self.setCursor(Qt.ClosedHandCursor)
                 return
             
+            if self.drawingMode in ("rect_add", "rect_erase", "rect_prompt"):
+                imagePoint = self.mapToImage(event.pos())
+                if imagePoint.x() >= 0 and imagePoint.y() >= 0 and imagePoint.x() < self.baseImage.width() and imagePoint.y() < self.baseImage.height():
+                    self.rectSelecting = True
+                    self.rectStart = imagePoint
+                    self.rectEnd = imagePoint
+                    self.update()
+                return
+
             if not self.drawing and self.maskLayer:
                 self.saveMaskState()
                 
@@ -472,34 +515,36 @@ class Canvas(QWidget):
                 )
 
                 painter = QPainter(self.maskLayer)
-                painter.setCompositionMode(QPainter.CompositionMode_Source)
+                try:
+                    painter.setCompositionMode(QPainter.CompositionMode_Source)
 
-                if self.drawingMode == "target":
-                    painter.setPen(
-                        QPen(
-                            self.drawingColor,
-                            self.brushSize,
-                            Qt.SolidLine,
-                            Qt.RoundCap,
-                            Qt.RoundJoin,
+                    if self.drawingMode == "target":
+                        painter.setPen(
+                            QPen(
+                                self.drawingColor,
+                                self.brushSize,
+                                Qt.SolidLine,
+                                Qt.RoundCap,
+                                Qt.RoundJoin,
+                            )
                         )
-                    )
-                    painter.setBrush(QBrush(self.drawingColor))
-                else:
-                    painter.setPen(
-                        QPen(
-                            Qt.black,
-                            self.brushSize,
-                            Qt.SolidLine,
-                            Qt.RoundCap,
-                            Qt.RoundJoin,
+                        painter.setBrush(QBrush(self.drawingColor))
+                    else:
+                        painter.setPen(
+                            QPen(
+                                Qt.black,
+                                self.brushSize,
+                                Qt.SolidLine,
+                                Qt.RoundCap,
+                                Qt.RoundJoin,
+                            )
                         )
-                    )
-                    painter.setBrush(QBrush(Qt.black))
-                    painter.setCompositionMode(QPainter.CompositionMode_Clear)
+                        painter.setBrush(QBrush(Qt.black))
+                        painter.setCompositionMode(QPainter.CompositionMode_Clear)
 
-                painter.drawPoint(self.lastPoint)
-                painter.end()
+                    painter.drawPoint(self.lastPoint)
+                finally:
+                    painter.end()
                 
                 self.cachedDirty = True
                 self.update(affectedArea)
@@ -514,6 +559,13 @@ class Canvas(QWidget):
             self.update()
             return
             
+        if (event.buttons() & Qt.LeftButton) and self.drawingMode in ("rect_add", "rect_erase", "rect_prompt") and self.rectSelecting:
+            imagePoint = self.mapToImage(event.pos())
+            if imagePoint.x() >= 0 and imagePoint.y() >= 0 and imagePoint.x() < self.baseImage.width() and imagePoint.y() < self.baseImage.height():
+                self.rectEnd = imagePoint
+                self.update()
+            return
+
         if (event.buttons() & Qt.LeftButton) and self.drawing:
             imagePoint = self.mapToImage(event.pos())
             
@@ -542,32 +594,34 @@ class Canvas(QWidget):
                 )
 
                 painter = QPainter(self.maskLayer)
-                painter.setCompositionMode(QPainter.CompositionMode_Source)
+                try:
+                    painter.setCompositionMode(QPainter.CompositionMode_Source)
 
-                if self.drawingMode == "target":
-                    painter.setPen(
-                        QPen(
-                            self.drawingColor,
-                            self.brushSize,
-                            Qt.SolidLine,
-                            Qt.RoundCap,
-                            Qt.RoundJoin,
+                    if self.drawingMode == "target":
+                        painter.setPen(
+                            QPen(
+                                self.drawingColor,
+                                self.brushSize,
+                                Qt.SolidLine,
+                                Qt.RoundCap,
+                                Qt.RoundJoin,
+                            )
                         )
-                    )
-                else:
-                    painter.setPen(
-                        QPen(
-                            Qt.black,
-                            self.brushSize,
-                            Qt.SolidLine,
-                            Qt.RoundCap,
-                            Qt.RoundJoin,
+                    else:
+                        painter.setPen(
+                            QPen(
+                                Qt.black,
+                                self.brushSize,
+                                Qt.SolidLine,
+                                Qt.RoundCap,
+                                Qt.RoundJoin,
+                            )
                         )
-                    )
-                    painter.setCompositionMode(QPainter.CompositionMode_Clear)
+                        painter.setCompositionMode(QPainter.CompositionMode_Clear)
 
-                painter.drawLine(self.lastPoint, imagePoint)
-                painter.end()
+                    painter.drawLine(self.lastPoint, imagePoint)
+                finally:
+                    painter.end()
 
                 self.lastPoint = imagePoint
                 
@@ -580,6 +634,21 @@ class Canvas(QWidget):
                 self.panning = False
                 self.setCursor(Qt.OpenHandCursor)
             
+            if self.drawingMode in ("rect_add", "rect_erase", "rect_prompt") and self.rectSelecting:
+                self.rectSelecting = False
+                x1 = min(self.rectStart.x(), self.rectEnd.x())
+                y1 = min(self.rectStart.y(), self.rectEnd.y())
+                x2 = max(self.rectStart.x(), self.rectEnd.x())
+                y2 = max(self.rectStart.y(), self.rectEnd.y())
+                if self.drawingMode == "rect_add" and hasattr(self.parent, 'onRectAddSelected'):
+                    self.parent.onRectAddSelected([x1, y1, x2, y2])
+                elif self.drawingMode == "rect_erase" and hasattr(self.parent, 'onRectEraseSelected'):
+                    self.parent.onRectEraseSelected([x1, y1, x2, y2])
+                elif self.drawingMode == "rect_prompt" and hasattr(self.parent, 'onBoxPromptSelected'):
+                    self.parent.onBoxPromptSelected([x1, y1, x2, y2])
+                self.update()
+                return
+
             if self.isDrawingLasso and len(self.lassoPoints) > 2:
                 self.fillLassoArea()
                 self.isDrawingLasso = False
@@ -595,31 +664,34 @@ class Canvas(QWidget):
         tempImage.fill(Qt.transparent)
         
         painter = QPainter(tempImage)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        
-        painter.setPen(Qt.NoPen)  
-        painter.setBrush(QBrush(self.drawingColor))
-        
-        path = QPainterPath()
-        path.moveTo(self.lassoPoints[0])
-        
-        for i in range(1, len(self.lassoPoints)):
-            path.lineTo(self.lassoPoints[i])
-        
-        path.closeSubpath()
-        
-        painter.drawPath(path)
-        painter.end()
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            
+            painter.setPen(Qt.NoPen)  
+            painter.setBrush(QBrush(self.drawingColor))
+            
+            path = QPainterPath()
+            path.moveTo(self.lassoPoints[0])
+            
+            for i in range(1, len(self.lassoPoints)):
+                path.lineTo(self.lassoPoints[i])
+            
+            path.closeSubpath()
+            
+            painter.drawPath(path)
+        finally:
+            painter.end()
         
         painter = QPainter(self.maskLayer)
-        
-        if self.drawingMode == "lasso" or self.drawingMode == "target":
-            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-        else:
-            painter.setCompositionMode(QPainter.CompositionMode_Clear)
-            
-        painter.drawImage(0, 0, tempImage)
-        painter.end()
+        try:
+            if self.drawingMode == "lasso" or self.drawingMode == "target":
+                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            else:
+                painter.setCompositionMode(QPainter.CompositionMode_Clear)
+                
+            painter.drawImage(0, 0, tempImage)
+        finally:
+            painter.end()
         
         self.cachedDirty = True
         self.update()
